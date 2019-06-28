@@ -557,19 +557,19 @@ Agent.routine = function(self, env)
     TraceAI('legion follow')
     legion:forEach(function(actor)
      actor:stepToTarget(master)
-	end)
+    end)
    elseif target then
     TraceAI('attack target')
 	legion:forEach(function(actor)
      actor:attackTarget(target)
      actor:stepToTarget(target)
-	end)
+    end)
    elseif threat then
     TraceAI('attack threat')
     legion:forEach(function(actor)
      actor:attackTarget(threat)
      actor:stepToTarget(threat)
-	end)
+    end)
    end
   end
  end 

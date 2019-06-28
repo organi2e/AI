@@ -77,9 +77,9 @@ function Store:load(path)
      assert(#value == 1)
      tbl[index] = cache[value[1]]
     end
-	if type(index) == type({}) then
-	 ref[index] = cache[index[1]]
-	end
+    if type(index) == type({}) then
+     ref[index] = cache[index[1]]
+    end
    end
    for k, v in pairs(ref) do
     tbl[v], tbl[k] = tbl[k], nil

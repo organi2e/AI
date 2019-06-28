@@ -405,9 +405,7 @@ Agent.isDesignState = function(self) return self.state == STATE_DESIGN end
 
 Agent.executePatrolCommand = function(self, cmd)
  local ground = cmd.ground
- if ground then
-  return self:resetState(STATE_PATROL, ground)
- end
+ return ground and self:resetState(STATE_PATROL, ground)
 end
 
 Agent.executeMovingCommand = function(self, cmd)
@@ -422,16 +420,18 @@ Agent.executeArtingCommand = function(self, cmd)
  local skill = cmd.skill
  local target = cmd.target
  local ground = cmd.ground
- if level and skill then
-  return target and self:pushState(STATE_ARTING, {level, skill, target, nil}) or ground and self:pushState(STATE_ARTING, {level, skill, nil, ground})
+ if not level or not skill then
+  -- nil
+ elseif target then
+  return self:pushState(STATE_ARTING, {level, skill, target, nil})
+ elseif ground then
+  return self:pushState(STATE_ARTING, {level, skill, nil, ground})
  end
 end
 
 Agent.executeAttackCommand = function(self, cmd)
  local target = cmd.target
- if target then
-  return self:pushState(STATE_ATTACK, target)
- end
+ return target and self:pushState(STATE_ATTACK, target)
 end
 
 Agent.executeReviseCommand = function(self, cmd)

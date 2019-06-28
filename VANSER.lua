@@ -52,6 +52,7 @@ local DISTANCE_TO_SUPPORTING = 11
 local DISTANCE_TO_STANDALONE = 13
 
 local MOVING_CHANCE = 4
+local ARTING_CHANCE = 4
 
 local JAMMER_TO_CASTER = {{5, SKILL_NEEDLE_ID}, {1, SKILL_MIRAGE_ID}} -- 優先度: ニードルオブパラライズLV5 > カプリスLV1
 local ARTING_ON_ATTACK = {{5, SKILL_MIRAGE_ID}, {1, SKILL_NEEDLE_ID}} -- 優先度: カプリスLV5 > ニードルオブパラライズLV1
@@ -216,6 +217,27 @@ Agent.trySurveyBeasts = function(self, env)
  end
 end
 
+Agent.trySurveyLegion = function(self, env)
+ local servant = env:getServant()
+ local sID = servant:getID()
+ local master = env:getMaster()
+ local mID = master:getID()
+ local threat = env:getBeast():getMinimumElement(function(actor)
+  local tID = not actor:isDead() and not actor:mayFriendship() and actor:getTargetID()
+  return ( tID == sID or tID == mID ) and env:getThreatOf(actor):isEmpty() and actor:getDistanceToTarget(master)
+ end)
+ local distance = threat and threat:getDistanceToTarget(master)
+ if distance and distance < DISTANCE_TO_SUPPORTING then
+  local legion = env:getLegion()
+  if legion:isEmpty() then
+   local level, skill = 5, SKILL_SUMMON_ID
+   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill threat:getID(), nil})
+  elseif legion:filter(function(actor) local enemy = env:getTargetID(actor) return enemy and not enemy:isDead() end):isEmpty() then
+   return self:tryAttackTarget(env, threat:getID()) 
+  end
+ end
+end
+
 Agent.trySurveyRelief = function(self, env)
  
 end
@@ -322,7 +344,7 @@ Agent.onIdlingState = function(self, env)
  elseif self.strategy == STRATEGY_STABLE then
   return self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_UNIQUE then
-  return self:tryFollowMaster(env) or self:tryCuringFellow(env)
+  return self:trySurveyLegion(env) or self:trySurveyCaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_FOLLOW then
   return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_DEFEND then
@@ -339,7 +361,7 @@ Agent.onPatrolState = function(self, env)
  elseif self.strategy == STRATEGY_STABLE then
   return self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_UNIQUE then
-  return self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
+  return self:trySurveyLegion(env) or self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_FOLLOW then
   return self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_DEFEND then

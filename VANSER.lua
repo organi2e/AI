@@ -560,7 +560,7 @@ Agent.routine = function(self, env)
     end)
    elseif target then
     TraceAI('attack target')
-	legion:forEach(function(actor)
+    legion:forEach(function(actor)
      actor:attackTarget(target)
      actor:stepToTarget(target)
     end)

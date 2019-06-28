@@ -18,11 +18,7 @@ Stack.tostring = function(self, visit)
   local result = nil
   local index = check:insert(self)
   table.foreach(self, function(index, value)
-   if type(value) == type(self) then
-	result = ( result and result .. ', ' or '' ) .. ( getmetatable(value).__tostring or tostring ) ( value, check )
-   else
-    result = ( result and result .. ', ' or '' ) .. tostring(value)
-   end
+   result = ( result and result .. ', ' or '' ) .. ( type(value) == type(self) and getmetatable(value).__tostring or tostring ) ( value, check )
   end)
   return string.format('Stack<table %d> {%s}', index, result or '')
  end

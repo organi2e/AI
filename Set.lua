@@ -28,11 +28,7 @@ Set.tostring = function(self, visit)
   local result = nil
   local index = check:insert(self)
   table.foreach(self, function(index, value)
-   if type(index) == type(self) then
-	result = ( result and result .. ', ' or '' ) .. ( getmetatable(index).__tostring or tostring ) ( index, check )
-   else
-    result = ( result and result .. ', ' or '' ) .. tostring(index)
-   end
+   result = ( result and result .. ', ' or '' ) .. ( type(value) == type(self) and getmetatable(value).__tostring or tostring ) ( value, check )
   end)
   return string.format('Set<table %d> {%s}', index, result or '')
  end

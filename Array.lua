@@ -2,7 +2,7 @@ local Set = require('./AI/USER_AI/Set')
 local Array = {}
 Array.new = function(class, array)
  local empty = {}
- return setmetatable(type(array) == type(empty) and array or empty, {__index=class, __tostring=class.tostring})
+ return setmetatable(type(array) == type(empty) and array or empty, {__index=class, __tostring=class.tostring, __add=function(a, b) local array = Array:new() a:forEach(function(v) array:push(v) end) b:forEach(function(v) array:push(v) end) return array end})
 end
 Array.range = function(class, v, e, i)
  local array = class:new()

@@ -166,7 +166,7 @@ Actor.moveToGround = function(self, ground)
 end
 Actor.stepToGround = function(self, ground)
  local actual = self and self:getPosition()
- return actual and self:moveToGround(actual + ( ground - actual ):map(function(x) return math.floor(x/2) end))
+ return actual and self:moveToGround(actual + (ground-actual):map(function(x) return math.floor(x/2) end))
 end
 Actor.moveToTarget = function(self, target)
  local ground = target and target:getPosition()

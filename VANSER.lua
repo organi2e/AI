@@ -83,7 +83,13 @@ end
 
 Agent.getCatchup = function(self, env)
  local catch = self.catch
- return catch and env:getActorByID(catch) or env:getMaster()
+ local actor = catch and env:getActorByID(catch)
+ if actor then
+  return actor
+ else
+  self.catch = nil
+  return env:getMaster()
+ end
 end
 
 Agent.store = function(self)
@@ -213,9 +219,7 @@ Agent.trySurveyThreat = function(self, env)
   return actor:getTargetID() == mID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
  end)
  local distance = threat and threat:getDistanceToTarget(master, math.huge)
- if distance and distance < DISTANCE_TO_SUPPORTING then
-  return self:pushState(STATE_ATTACK, threat:getID())
- end
+ return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, thread:getID())
 end
 
 Agent.trySurveyBeasts = function(self, env)
@@ -231,9 +235,7 @@ Agent.trySurveyBeasts = function(self, env)
   end) and servant:getDistanceToTarget(actor)
  end)
  local distance = target and target:getDistanceToTarget(master, math.huge)
- if distance and distance < DISTANCE_TO_SUPPORTING then
-  return self:pushState(STATE_ATTACK, target:getID())
- end
+ return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, target:getID())
 end
 
 Agent.trySurveyLegion = function(self, env)
@@ -288,6 +290,16 @@ Agent.tryCuringFellow = function(self, env)
   return self:pushState(STATE_ARTING, {3, skill, servant:getID(), nil})
  elseif shpr < sspr then
   return self:pushState(STATE_ARTING, {4, skill, servant:getID(), nil})
+ end
+end
+
+Agent.tryAroundMaster = function(self, env)
+ local servant = self:getServant(env)
+ local master = self:getCatchup(env)
+ if master:isSit() then
+  local ground = servant:getPosition()
+  local around = vector2(math.random(-1, 1), math.random(-1, 1))
+  return ground and around and servant:moveToGround(ground + around)
  end
 end
 
@@ -378,7 +390,7 @@ Agent.onIdlingState = function(self, env)
  if not self.strategy then
   -- nil
  elseif self.strategy == STRATEGY_STABLE then
-  return self:tryFollowMaster(env) or self:tryCuringFellow(env)
+  return self:tryAroundMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_UNIQUE then
   return self:trySurveyLegion(env) or self:trySurveyCaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_FOLLOW then
@@ -520,6 +532,7 @@ Agent.executeAttackCommand = function(self, cmd)
 end
 
 Agent.executeReviseCommand = function(self, cmd)
+ self.catch = nil
  return self:isIdlingState() and self:resetState(STATE_IDLING, nil) or self:pushState(STATE_IDLING, nil)
 end
 
@@ -590,13 +603,14 @@ Agent.executeDesignCommand = function(self, cmd)
  end
 end
 
-Agent.executeSelectCommand = function(self, cmd)
+Agent.executeSearchCommand = function(self, cmd)
  local target = cmd.target
- if not target then
-  
- else
-  return self:resetState(STATE_RELIEF, target)
- end
+ return target and self:resetState(STATE_RELIEF, target)
+end
+
+Agent.executeSelectCommand = function(self, cmd)
+ self.catch = cmd.target
+ return self.catch
 end
 
 Agent.execute = function(self, cmd)
@@ -606,7 +620,8 @@ Agent.execute = function(self, cmd)
  elseif cmd.attack and self:executeAttackCommand(cmd) then -- TraceAI("Execute attack command")
  elseif cmd.moving and self:executeMovingCommand(cmd) then -- TraceAI("Execute moving command")
  elseif cmd.patrol and self:executePatrolCommand(cmd) then -- TraceAI("Execute patrol command")
- elseif cmd.select and self:executeSelectCommand(cmd) then -- TraceAI("Execute design command")
+ elseif cmd.search and self:executeSearchCommand(cmd) then -- TraceAI("Execute search command")
+ elseif cmd.select and self:executeSelectCommand(cmd) then -- TraceAI("Execute select command")
  elseif cmd.revise and self:executeReviseCommand(cmd) then -- TraceAI("Execute revise command")
  elseif cmd.design and self:executeDesignCommand(cmd) then -- TraceAI("Execute design command")
  else

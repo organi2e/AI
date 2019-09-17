@@ -5,18 +5,26 @@ local vector2 = require('./AI/USER_AI/Geometry').vector2
 
 local Command = {}
 Command.new = function(class, msg, env, config, reserved)
- local obj = {raw={msg}, clock=GetTick()}
+ local obj = {raw={msg}, clock=env.clock}
  if not msg or not env then
  elseif msg[1] == NONE_CMD then
  elseif msg[1] == MOVE_CMD then
   local ground = vector2(msg[2], msg[3])
   obj[reserved and "patrol" or "moving"] = true
   obj.ground = ground
-  obj.primal = {}
  elseif msg[1] == ATTACK_OBJECT_CMD then
-  obj[reserved and "select" or "attack"] = true
+  local master = env:getMaster()
+  local target = env:getActorByID(msg[2])
+  if reserved then
+   obj.search = true
+  else
+   if target:isMonster() then
+    obj.attack = true
+   else
+    obj.select = true
+   end
+  end
   obj.target = msg[2]
-  obj.primal = {msg[2] == env:getMasterID(), msg[2] == env:getServantID()}
  elseif msg[1] == ATTACK_AREA_CMD then
   local ground = vector2(msg[2], msg[3])
   obj.attack = true
@@ -38,9 +46,10 @@ Command.new = function(class, msg, env, config, reserved)
   obj.ground = ground
  elseif msg[1] == FOLLOW_CMD then -- Custom ordering by Alt + T
   local master = env:getMaster()
-  if master and master:isSit() then
+  local ground = master and master:isSit() and master:getPosition()
+  if ground then
    obj.design = true
-   obj.ground = master:getPosition()
+   obj.ground = ground
   else
    obj.revise = true
   end

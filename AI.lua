@@ -1,46 +1,28 @@
+require('./AI/Const')
+
 local EIRA          = 48
 local BAYERI        = 49
 local SERA          = 50
 local DIETER        = 51
 local ELEANOR       = 52
 
-local critic = nil
-local order = nil
+local AGENTS = {
+ [SERA]='./AI/USER_AI/VANSER',
+}
+
+local critic = require('./AI/USER_AI/Critic'):new():restore()
+local order = require('./AI/USER_AI/Order'):new():restore()
 local agent = nil
 
 function AI(id)
-
- -- allocate critic
- if not critic then
-  critic = require('./AI/USER_AI/Critic'):new()
-  critic:restore()
- end
- 
- -- allocate order
- if not order then
-  order = require('./AI/USER_AI/Order'):new()
-  order:restore()
- end
- 
- -- allocate actor
- if not agent then
-  local homuntype = GetV(V_HOMUNTYPE, id)
-  if not homuntype then
-   -- nil
-  elseif homuntype == SERA then
-   agent = require('./AI/USER_AI/VANSER'):new()
-   agent:restore()
-  else
-   -- nil
-  end
- end
- 
- -- main routine
- if critic and order and agent then
+ if agent then -- main routine
   local env = critic:observe(id)
   local cmd = order:observe(id, env)
   critic:execute(env, cmd)
   agent:execute(cmd)
   agent:routine(env)
+ else -- allocate actor
+  local path = AGENTS[GetV(V_HOMUNTYPE, id)]
+  agent = path and require(path):new():restore()
  end
 end

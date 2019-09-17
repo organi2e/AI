@@ -16,6 +16,8 @@ local STATE_MOVING = 257
 local STATE_ARTING = 258
 local STATE_ATTACK = 259
 local STATE_PATROL = 260
+local STATE_RELIEF = 261
+local STATE_SERIES = 300
 local STATE_DESIGN = 320
 
 local COOLS = {} -- スキル固有クールタイム COOLS[スキルID][スキルレベル] = ミリ秒
@@ -43,7 +45,7 @@ COOLS[SKILL_POISON_ID] = {2000, 2000, 2000, 2000, 2000} -- http://www.ragfun.net
 DELAY[SKILL_POISON_ID] = {0, 0, 0, 0, 0} -- ?
 
 local SKILL_RELIEF_ID = 8021 -- i.e. Pain killer
-COOLS[SKILL_RELIEF_ID] = {0, 30000, 30000, 60000, 60000} -- http://www.ragfun.net/alchemist/index.php?%A5%DB%A5%E0%A5%F3%A5%AF%A5%EB%A5%B9S%2FHomunType%2FSERA#h8df5b10
+COOLS[SKILL_RELIEF_ID] = {30000, 30000, 30000, 60000, 60000} -- http://www.ragfun.net/alchemist/index.php?%A5%DB%A5%E0%A5%F3%A5%AF%A5%EB%A5%B9S%2FHomunType%2FSERA#h8df5b10
 DELAY[SKILL_RELIEF_ID] = {0, 0, 0, 0, 0} -- ?
 
 local DISTANCE_TO_FOLLOW_MIN = 2
@@ -70,8 +72,18 @@ Agent.new = function(class)
  obj.state = STATE_IDLING
  obj.cools = {}
  obj.cache = {}
+ obj.catch = nil
  obj.strategy = STRATEGY_STABLE
  return setmetatable(obj, {__index=class, __tostring=class.tostring})
+end
+
+Agent.getServant = function(self, env)
+ return env:getServant()
+end
+
+Agent.getCatchup = function(self, env)
+ local catch = self.catch
+ return catch and env:getActorByID(catch) or env:getMaster()
 end
 
 Agent.store = function(self)
@@ -84,8 +96,15 @@ Agent.restore = function(self)
  local store = Store:load(STORAGES)
  if store then
   self.strategy = store.strategy or self.strategy
-  return self
+  return self, true
+ else
+  return self, false
  end
+end
+
+Agent.appendState = function(self, state, input)
+ self.stack:enque({state, input})
+ return true
 end
 
 Agent.resetState = function(self, state, input)
@@ -123,7 +142,7 @@ Agent.mayUseSkill = function(self, skill, env)
 end
 
 Agent.tryUseSkillTarget = function(self, level, skill, target, env)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local clock = self:mayUseSkill(skill, env)
  local cools, delay = self:getSkillCD(level, skill)
  if clock and cools and delay then
@@ -136,7 +155,7 @@ end
 
 --
 Agent.tryUseSkillGround = function(self, level, skill, ground, env)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local clock = self:mayUseSkill(skill, env)
  local cools, delay = self:getSkillCD(level, skill)
  if clock and cools and delay then
@@ -155,7 +174,7 @@ end
 
 -- 
 Agent.trySurveyMaster = function(self, env)
- local master = env:getMaster()
+ local master = self:getCatchup(env)
  local target = master:isAttack() and env:getTargetOf(master)
  local distance = target and target:isMonster() and not target:isDead() and target:getDistanceToTarget(master)
  return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, target:getID()) 
@@ -163,16 +182,16 @@ end
 
 --
 Agent.trySurveyCaster = function(self, env)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local sID = servant:getID()
- local master = env:getMaster()
+ local master = self:getCatchup(env)
  local mID = master:getID() 
  local caster = env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == sID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
  end) or env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == mID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
  end)
- local distance = caster and caster:getDistanceToTarget(master)
+ local distance = caster and caster:getDistanceToTarget(master, math.huge)
  if distance and distance < DISTANCE_TO_SUPPORTING then
   for index, value in ipairs(JAMMER_TO_CASTER) do
    local level, skill = unpack(value)
@@ -184,25 +203,25 @@ Agent.trySurveyCaster = function(self, env)
 end
 
 Agent.trySurveyThreat = function(self, env)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local sID = servant:getID()
- local master = env:getMaster()
+ local master = self:getCatchup(env)
  local mID = master:getID()
  local threat = env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == sID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor) 
  end) or env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == mID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
  end)
- local distance = threat and threat:getDistanceToTarget(master)
+ local distance = threat and threat:getDistanceToTarget(master, math.huge)
  if distance and distance < DISTANCE_TO_SUPPORTING then
   return self:pushState(STATE_ATTACK, threat:getID())
  end
 end
 
 Agent.trySurveyBeasts = function(self, env)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local sID = servant:getID()
- local master = env:getMaster()
+ local master = self:getCatchup(env)
  local mID = master:getID()
  local target = env:getBeast():getMinimumElement(function(actor)
   local cover = not actor:isDead() and env:getTargetOf(actor)
@@ -211,40 +230,47 @@ Agent.trySurveyBeasts = function(self, env)
    return other:getTargetID() == actorID
   end) and servant:getDistanceToTarget(actor)
  end)
- local distance = target and target:getDistanceToTarget(master)
+ local distance = target and target:getDistanceToTarget(master, math.huge)
  if distance and distance < DISTANCE_TO_SUPPORTING then
   return self:pushState(STATE_ATTACK, target:getID())
  end
 end
 
 Agent.trySurveyLegion = function(self, env)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local sID = servant:getID()
- local master = env:getMaster()
+ local master = self:getCatchup(env)
  local mID = master:getID()
  local threat = env:getBeast():getMinimumElement(function(actor)
   local tID = not actor:isDead() and not actor:mayFriendship() and actor:getTargetID()
-  return ( tID == sID or tID == mID ) and env:getThreatOf(actor):isEmpty() and actor:getDistanceToTarget(master)
+  return ( tID == sID or tID == mID ) and actor:getDistanceToTarget(master)
  end)
- local distance = threat and threat:getDistanceToTarget(master)
+ local distance = threat and threat:getDistanceToTarget(master, math.huge)
  if distance and distance < DISTANCE_TO_SUPPORTING then
   local legion = env:getLegion()
   if legion:isEmpty() then
    local level, skill = 5, SKILL_SUMMON_ID
-   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill threat:getID(), nil})
-  elseif legion:filter(function(actor) local enemy = env:getTargetID(actor) return enemy and not enemy:isDead() end):isEmpty() then
-   return self:tryAttackTarget(env, threat:getID()) 
+   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, threat:getID(), nil})
+  elseif legion:filter(function(actor) local enemy = env:getTargetOf(actor) return enemy and not enemy:isDead() end):isEmpty() then
+   local range = servant:getAttackRange()
+   if distance <= range then
+    return servant:attackTarget(threat) and servant:stepToTarget(threat)
+   elseif self:getRetryCount() < MOVING_CHANCE then
+    return servant:stepToTarget(threat)
+   end
   end
  end
 end
 
-Agent.trySurveyRelief = function(self, env)
- 
+Agent.trySurveyRelief = function(self, env, target)
+ local servant = self:getServant(env)
+ local level, skill = 1, SKILL_RELIEF_ID
+ return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, target, nil})
 end
 
 Agent.tryCuringFellow = function(self, env)
- local servant = env:getServant()
- local master = env:getMaster()
+ local servant = self:getServant(env)
+ local master = self:getCatchup(env)
  local sspr = servant:getSP().ratio
  local shpr = servant:getHP().ratio
  local mhpr = master:getHP().ratio
@@ -252,7 +278,7 @@ Agent.tryCuringFellow = function(self, env)
  local range = servant:getSkillAttackRange(skill)
  local peace = env:getBeast():all(function(actor)
   local distance = servant:getDistanceToTarget(actor)
-  return not ( distance and distance < range ) or actor:isDead() or actor:mayFriendship()
+  return not ( distance and distance <= range ) or actor:isDead() or actor:mayFriendship()
  end)
  if not peace or not self:mayUseSkill(skill, env) then
   -- nil
@@ -266,8 +292,8 @@ Agent.tryCuringFellow = function(self, env)
 end
 
 Agent.tryFollowMaster = function(self, env)
- local servant = env:getServant()
- local master = env:getMaster()
+ local servant = self:getServant(env)
+ local master = self:getCatchup(env)
  local distance = servant:getDistanceToTarget(master)
  if not distance then
   -- nil
@@ -278,15 +304,25 @@ Agent.tryFollowMaster = function(self, env)
  end
 end
 
+Agent.tryFollowTarget = function(self, env, target)
+ local servant = self:getServant(env)
+ local distance = target and servant:getDistanceToTarget(target)
+ if not distance then
+  -- nil
+ elseif distance > DISTANCE_TO_FOLLOW_MIN then
+  return servant:stepToTarget(target)
+ end
+end
+
 Agent.tryMovingGround = function(self, env, ground)
- local servant = env:getServant()
- local range = 1
- local distance = servant:getDistanceToGround(ground, 1) -- L1 norm
+ local servant = self:getServant(env)
+ local range = 0
+ local distance = servant:getDistanceToGround(ground, math.huge) -- L∞ norm
  return distance and range < distance and self:getRetryCount() < MOVING_CHANCE and servant:moveToGround(ground) 
 end
 
 Agent.tryArtingTarget = function(self, env, level, skill, target)
- local servant = env:getServant()
+ local servant = self:getServant(env)
  local actor = env:getActorByID(target)
  local range = servant:getSkillAttackRange(skill)
  local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
@@ -304,8 +340,8 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
 end
 
 Agent.tryAttackArting = function(self, env, target)
- local servant = env:getServant()
- local master = env:getMaster()
+ local servant = self:getServant(env)
+ local master = self:getCatchup(env)
  local sspr = servant:getSP().ratio
  local shpr = servant:getHP().ratio
  local mhpr = master:getHP().ratio
@@ -371,6 +407,23 @@ Agent.onPatrolState = function(self, env)
  end
 end
 
+Agent.onReliefState = function(self, env)
+ local target = self.input
+ if not target then
+  -- nil
+ elseif self.strategy == STRATEGY_STABLE then
+  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+ elseif self.strategy == STRATEGY_UNIQUE then
+  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+ elseif self.strategy == STRATEGY_FOLLOW then
+  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+ elseif self.strategy == STRATEGY_DEFEND then
+  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+ elseif self.strategy == STRATEGY_ACTIVE then
+  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+ end
+end
+
 Agent.onAttackState = function(self, env)
  local target = self.input
  if not target then
@@ -389,7 +442,7 @@ Agent.onAttackState = function(self, env)
 end
 
 Agent.onArtingState = function(self, env)
- local level, skill, target, ground = unpack(self.input or {})
+ local level, skill, target, ground = unpack(self.input)
  if not level or not skill then
   -- nil
  elseif target then
@@ -406,8 +459,16 @@ Agent.onMovingState = function(self, env)
  end
 end
 
+Agent.onSeriesState = function(self, env)
+ local series = self.input
+ if series then
+  local yield, state, input = coroutine.resume(series, env)
+  return yield and self:pushState(state, input) and self:routine(env)
+ end
+end
+
 Agent.onDesignState = function(self, env)
- return self:onMovingState(env)
+ return self:getCatchup(env):isSit() and self:onMovingState(env)
 end
 
 Agent.onRecallState = function(self, env)
@@ -423,6 +484,8 @@ Agent.isMovingState = function(self) return self.state == STATE_MOVING end
 Agent.isArtingState = function(self) return self.state == STATE_ARTING end
 Agent.isAttackState = function(self) return self.state == STATE_ATTACK end
 Agent.isPatrolState = function(self) return self.state == STATE_PATROL end
+Agent.isReliefState = function(self) return self.state == STATE_RELIEF end
+Agent.isSeriesState = function(self) return self.state == STATE_SERIES end
 Agent.isDesignState = function(self) return self.state == STATE_DESIGN end
 
 Agent.executePatrolCommand = function(self, cmd)
@@ -453,7 +516,7 @@ end
 
 Agent.executeAttackCommand = function(self, cmd)
  local target = cmd.target
- return target and self:pushState(STATE_ATTACK, target)
+ return target and self:pushState(STATE_ATTACK, target:getID())
 end
 
 Agent.executeReviseCommand = function(self, cmd)
@@ -462,71 +525,78 @@ end
 
 Agent.executeDesignCommand = function(self, cmd)
  local ground = cmd.ground
- local indicate = function(self, center)
-  if not self.strategy then
+ local indicate = function(ground, strategy)
+  if not strategy or not ground then
    -- nil
-  elseif self.strategy == STRATEGY_STABLE then -- 往復
-   return self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-  elseif self.strategy == STRATEGY_UNIQUE then -- S
-   return self:pushState(STATE_DESIGN, center + vector2(-1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1,  1))
-  elseif self.strategy == STRATEGY_FOLLOW then -- Z
-   return self:pushState(STATE_DESIGN, center + vector2( 1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, -1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1,  1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1,  1))
-  elseif self.strategy == STRATEGY_DEFEND then -- 時計回り
-   return self:pushState(STATE_DESIGN, center + vector2( 0, 1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0,-1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0, 1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0,-1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0, 1))
-  elseif self.strategy == STRATEGY_ACTIVE then -- 反時計回り
-   return self:pushState(STATE_DESIGN, center + vector2( 0, 1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0,-1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0, 1))
-      and self:pushState(STATE_DESIGN, center + vector2( 1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0,-1))
-      and self:pushState(STATE_DESIGN, center + vector2(-1, 0))
-      and self:pushState(STATE_DESIGN, center + vector2( 0, 1))
+  elseif strategy == STRATEGY_STABLE then -- 往復
+   return self:resetState(STATE_DESIGN, ground + vector2( 1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 0))
+  elseif strategy == STRATEGY_UNIQUE then -- S
+   return self:resetState(STATE_DESIGN, ground + vector2( 1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 1))
+  elseif strategy == STRATEGY_FOLLOW then -- Z
+   return self:resetState(STATE_DESIGN, ground + vector2(-1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 1))
+  elseif strategy == STRATEGY_DEFEND then -- 時計回り
+   return self:resetState(STATE_DESIGN, ground + vector2( 0, 1))
+	 and self:appendState(STATE_DESIGN, ground + vector2( 1, 0))
+	 and self:appendState(STATE_DESIGN, ground + vector2( 0,-1))
+	 and self:appendState(STATE_DESIGN, ground + vector2(-1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 0, 1))
+	 and self:appendState(STATE_DESIGN, ground + vector2( 1, 0))
+	 and self:appendState(STATE_DESIGN, ground + vector2( 0,-1))
+	 and self:appendState(STATE_DESIGN, ground + vector2(-1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 0, 1))
+  elseif strategy == STRATEGY_ACTIVE then -- 反時計回り
+   return self:resetState(STATE_DESIGN, ground + vector2( 0, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 0,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 0, 1))
+     and self:appendState(STATE_DESIGN, ground + vector2(-1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 0,-1))
+     and self:appendState(STATE_DESIGN, ground + vector2( 1, 0))
+     and self:appendState(STATE_DESIGN, ground + vector2( 0, 1))
   end
  end
- if not ground then
-  -- nil
- elseif self:isDesignState() then
-  self.strategy = self.strategy and STRATEGY_CHANGE[self.strategy] or STRATEGY_STABLE
-  return self:store() and self:resetState(STATE_IDLING, nil) and indicate(self, ground)
- elseif self:isIdlingState() then
-  return self:resetState(STATE_IDLING, nil) and indicate(self, ground)
- else
-  return self:resetState(STATE_IDLING, nil)
+ if ground then
+  if nil then
+   -- nil
+  elseif self:isDesignState() then
+   self.strategy = self.strategy and STRATEGY_CHANGE[self.strategy] or STRATEGY_STABLE  
+   return self:store() and indicate(ground, self.strategy)
+  elseif self:isIdlingState() then
+   return                  indicate(ground, self.strategy)
+  else
+   return self:resetState(STATE_IDLING, nil)
+  end
  end
 end
 
 Agent.executeSelectCommand = function(self, cmd)
- 
+ local target = cmd.target
+ if not target then
+  
+ else
+  return self:resetState(STATE_RELIEF, target)
+ end
 end
 
 Agent.execute = function(self, cmd)
@@ -540,8 +610,8 @@ Agent.execute = function(self, cmd)
  elseif cmd.revise and self:executeReviseCommand(cmd) then -- TraceAI("Execute revise command")
  elseif cmd.design and self:executeDesignCommand(cmd) then -- TraceAI("Execute design command")
  else
-  TraceAI(tostring(self))
-  TraceAI(tostring(cmd))
+  -- TraceAI(tostring(self))
+  -- TraceAI(tostring(cmd))
  end
 end
 
@@ -553,20 +623,22 @@ Agent.routine = function(self, env)
  elseif self:isArtingState() and self:onArtingState(env) then -- TraceAI("is arting state")
  elseif self:isAttackState() and self:onAttackState(env) then -- TraceAI("is attack state")
  elseif self:isPatrolState() and self:onPatrolState(env) then -- TraceAI("is patrol state")
+ elseif self:isReliefState() and self:onReliefState(env) then -- TraceAI('is relief state')
+ elseif self:isSeriesState() and self:onSeriesState(env) then -- TraceAI("is series state")
  elseif self:isDesignState() and self:onDesignState(env) then -- TraceAI("is design state")
  elseif                          self:onRecallState(env) then -- TraceAI('is recall state') -- やることがなければスタックを戻して割り込み前の状態に戻す
  elseif                          self:onDefectState(env) then -- TraceAI('is defect state') -- 状態が戻せないならdefect
  else
-  TraceAI(tostring(self))
-  TraceAI(tostring(env))
+  -- TraceAI(tostring(self))
+  -- TraceAI(tostring(env))
  end
  
   -- end 
- if true then
+ if false then
   local legion = env:getLegion()
   if not legion:isEmpty() then
-   local master = env:getMaster()
-   local servant = env:getServant()
+   local master = self:getCatchup(env)
+   local servant = self:getServant(env)
    local mID = master:getID()
    local sID = servant:getID()
    local target = master:isAttack() and env:getTargetOf(master)

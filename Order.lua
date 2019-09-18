@@ -7,24 +7,47 @@ local Command = {}
 Command.new = function(class, msg, env, config, reserved)
  local obj = {raw={msg}, clock=env.clock}
  if not msg or not env then
+  -- nil
  elseif msg[1] == NONE_CMD then
+  -- nil
  elseif msg[1] == MOVE_CMD then
   local ground = vector2(msg[2], msg[3])
-  obj[reserved and "patrol" or "moving"] = true
-  obj.ground = ground
- elseif msg[1] == ATTACK_OBJECT_CMD then
-  local master = env:getMaster()
-  local target = env:getActorByID(msg[2])
   if reserved then
-   obj.search = true
+   local targets = env:getActorsByPosition(ground)   
+   local monster = targets and targets:filter(function(actor)
+    actor:isMonster()
+   end):getFirst()
+   local organic = targets and targets:filter(function(actor)
+    not actor:isMonster()
+   end):getFirst()
+   if organic and monster then
+    -- nil
+   elseif organic then
+    obj.assist = true
+	obj.target = organic:getID()
+   elseif monster then
+	obj.attend = true
+	obj.target = monster:getID()
+   else
+    obj.patrol = true
+	obj.ground = ground
+   end
   else
+   obj.moving = true
+   obj.ground = ground
+  end
+ elseif msg[1] == ATTACK_OBJECT_CMD then
+  local target = env:getActorByID(msg[2])
+  if target then
    if target:isMonster() then
     obj.attack = true
-   else
+	obj.target = target:getID()
+	obj.append = reserved
+   elseif reserved then
     obj.select = true
+	obj.target = target:getID()
    end
   end
-  obj.target = msg[2]
  elseif msg[1] == ATTACK_AREA_CMD then
   local ground = vector2(msg[2], msg[3])
   obj.attack = true

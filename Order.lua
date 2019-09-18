@@ -60,8 +60,8 @@ Command.new = function(class, msg, env, config, reserved)
   obj.keepup = true
  elseif msg[1] == SKILL_OBJECT_CMD then
   obj.arting = true
-  obj.level, obj.skill = msg[2], msg[3]
   obj.target = msg[4]
+  obj.level, obj.skill = msg[2], msg[3]
  elseif msg[1] == SKILL_AREA_CMD then
   local ground = vector2(msg[4], msg[5])
   obj.arting = true

@@ -519,7 +519,8 @@ end
 
 Agent.executeAttackCommand = function(self, cmd)
  local target = cmd.target
- return target and self:pushState(STATE_ATTACK, target)
+ local append = cmd.append
+ return append and self:appendState(STATE_ATTACK, target) or self:pushState(STATE_ATTACK, target)
 end
 
 Agent.executeAttendCommand = function(self, cmd)
@@ -615,8 +616,7 @@ Agent.executeReviseCommand = function(self, cmd)
 end
 
 Agent.executeSelectCommand = function(self, cmd)
- local target = cmd.target
- self.catch = target
+ self.catch = cmd.target
  return self.catch
 end
 

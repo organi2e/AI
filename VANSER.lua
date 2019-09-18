@@ -115,6 +115,7 @@ end
 
 Agent.resetState = function(self, state, input)
  self.stack = Stack:new()
+ self.catch = nil
  return self:setState(state, input)
 end
 
@@ -219,7 +220,7 @@ Agent.trySurveyThreat = function(self, env)
   return actor:getTargetID() == mID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
  end)
  local distance = threat and threat:getDistanceToTarget(master, math.huge)
- return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, thread:getID())
+ return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, threat:getID())
 end
 
 Agent.trySurveyBeasts = function(self, env)
@@ -297,7 +298,7 @@ Agent.tryAroundMaster = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
  if master:isSit() then
-  local ground = servant:getPosition()
+  local ground = master:getPosition()
   local around = vector2(math.random(-1, 1), math.random(-1, 1))
   return ground and around and servant:moveToGround(ground + around)
  end
@@ -318,11 +319,12 @@ end
 
 Agent.tryFollowTarget = function(self, env, target)
  local servant = self:getServant(env)
- local distance = target and servant:getDistanceToTarget(target)
+ local actor = target and env:getActorByID(target)
+ local distance = actor and servant:getDistanceToTarget(actor)
  if not distance then
   -- nil
  elseif distance > DISTANCE_TO_FOLLOW_MIN then
-  return servant:stepToTarget(target)
+  return servant:stepToTarget(actor)
  end
 end
 
@@ -480,7 +482,8 @@ Agent.onSeriesState = function(self, env)
 end
 
 Agent.onDesignState = function(self, env)
- return self:getCatchup(env):isSit() and self:onMovingState(env)
+ local master = env:getMaster()
+ return master and master:isSit() and self:onMovingState(env)
 end
 
 Agent.onRecallState = function(self, env)
@@ -500,18 +503,6 @@ Agent.isReliefState = function(self) return self.state == STATE_RELIEF end
 Agent.isSeriesState = function(self) return self.state == STATE_SERIES end
 Agent.isDesignState = function(self) return self.state == STATE_DESIGN end
 
-Agent.executePatrolCommand = function(self, cmd)
- local ground = cmd.ground
- return ground and self:resetState(STATE_PATROL, ground)
-end
-
-Agent.executeMovingCommand = function(self, cmd)
- local ground = cmd.ground
- if ground then
-  return self:isMovingState() and self:setState(STATE_MOVING, ground) or self:pushState(STATE_MOVING, ground)
- end
-end
-
 Agent.executeArtingCommand = function(self, cmd)
  local level = cmd.level
  local skill = cmd.skill
@@ -528,12 +519,16 @@ end
 
 Agent.executeAttackCommand = function(self, cmd)
  local target = cmd.target
- return target and self:pushState(STATE_ATTACK, target:getID())
+ return target and self:pushState(STATE_ATTACK, target)
 end
 
-Agent.executeReviseCommand = function(self, cmd)
- self.catch = nil
- return self:isIdlingState() and self:resetState(STATE_IDLING, nil) or self:pushState(STATE_IDLING, nil)
+Agent.executeAttendCommand = function(self, cmd)
+ -- nil
+end
+
+Agent.executeAssistCommand = function(self, cmd)
+ local target = cmd.target
+ return target and self:resetState(STATE_RELIEF, target)
 end
 
 Agent.executeDesignCommand = function(self, cmd)
@@ -603,13 +598,25 @@ Agent.executeDesignCommand = function(self, cmd)
  end
 end
 
-Agent.executeSearchCommand = function(self, cmd)
- local target = cmd.target
- return target and self:resetState(STATE_RELIEF, target)
+Agent.executeMovingCommand = function(self, cmd)
+ local ground = cmd.ground
+ if ground then
+  return self:isMovingState() and self:setState(STATE_MOVING, ground) or self:pushState(STATE_MOVING, ground)
+ end
+end
+
+Agent.executePatrolCommand = function(self, cmd)
+ local ground = cmd.ground
+ return ground and self:resetState(STATE_PATROL, ground)
+end
+
+Agent.executeReviseCommand = function(self, cmd)
+ return self:isIdlingState() and self:resetState(STATE_IDLING, nil) or self:pushState(STATE_IDLING, nil)
 end
 
 Agent.executeSelectCommand = function(self, cmd)
- self.catch = cmd.target
+ local target = cmd.target
+ self.catch = target
  return self.catch
 end
 
@@ -617,13 +624,14 @@ Agent.execute = function(self, cmd)
  if not cmd then
   -- nil
  elseif cmd.arting and self:executeArtingCommand(cmd) then -- TraceAI("Execute arting command")
+ elseif cmd.assist and self:executeAssistCommand(cmd) then -- TraceAI("Execute assist command")
  elseif cmd.attack and self:executeAttackCommand(cmd) then -- TraceAI("Execute attack command")
+ elseif cmd.attend and self:executeAttendCommand(cmd) then -- TraceAI("Execute attend command")
+ elseif cmd.design and self:executeDesignCommand(cmd) then -- TraceAI("Execute design command")
  elseif cmd.moving and self:executeMovingCommand(cmd) then -- TraceAI("Execute moving command")
  elseif cmd.patrol and self:executePatrolCommand(cmd) then -- TraceAI("Execute patrol command")
- elseif cmd.search and self:executeSearchCommand(cmd) then -- TraceAI("Execute search command")
- elseif cmd.select and self:executeSelectCommand(cmd) then -- TraceAI("Execute select command")
  elseif cmd.revise and self:executeReviseCommand(cmd) then -- TraceAI("Execute revise command")
- elseif cmd.design and self:executeDesignCommand(cmd) then -- TraceAI("Execute design command")
+ elseif cmd.select and self:executeSelectCommand(cmd) then -- TraceAI("Execute select command")
  else
   -- TraceAI(tostring(self))
   -- TraceAI(tostring(cmd))

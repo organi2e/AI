@@ -14,12 +14,8 @@ Command.new = function(class, msg, env, config, reserved)
   local ground = vector2(msg[2], msg[3])
   if reserved then
    local targets = env:getActorsByPosition(ground)   
-   local monster = targets and targets:filter(function(actor)
-    actor:isMonster()
-   end):getFirst()
-   local organic = targets and targets:filter(function(actor)
-    not actor:isMonster()
-   end):getFirst()
+   local monster = targets and targets:filter(function(actor) return     actor:isMonster() end):getFirst()
+   local organic = targets and targets:filter(function(actor) return not actor:isMonster() end):getFirst()
    if organic and monster then
     -- nil
    elseif organic then

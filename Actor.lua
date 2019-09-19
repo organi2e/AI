@@ -176,7 +176,7 @@ Actor.stepToTarget = function(self, target)
  local ground = target and target:getPosition()
  return ground and self:stepToGround(ground)
 end
-Actor.useSkillObject = function(self, level, skill, target)
+Actor.useSkillTarget = function(self, level, skill, target)
  SkillObject(self:getID(), level, skill, target:getID())
  return self
 end

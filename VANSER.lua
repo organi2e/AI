@@ -73,6 +73,7 @@ Agent.new = function(class)
  obj.cools = {}
  obj.cache = {}
  obj.catch = nil
+ obj.delay = 0
  obj.strategy = STRATEGY_STABLE
  return setmetatable(obj, {__index=class, __tostring=class.tostring})
 end
@@ -84,7 +85,7 @@ end
 Agent.getCatchup = function(self, env)
  local catch = self.catch
  local actor = catch and env:getActorByID(catch)
- if actor then
+ if actor and not actor:isDead() then
   return actor
  else
   self.catch = nil
@@ -153,7 +154,7 @@ Agent.tryUseSkillTarget = function(self, level, skill, target, env)
  local clock = self:mayUseSkill(skill, env)
  local cools, delay = self:getSkillCD(level, skill)
  if clock and cools and delay then
-  servant:useSkillObject(level, skill, target)
+  servant:useSkillTarget(level, skill, target)
   self.cools[skill] = clock + cools
   self.delay = clock + delay
   return self
@@ -190,8 +191,8 @@ end
 --
 Agent.trySurveyCaster = function(self, env)
  local servant = self:getServant(env)
- local sID = servant:getID()
  local master = self:getCatchup(env)
+ local sID = servant:getID()
  local mID = master:getID() 
  local caster = env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == sID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
@@ -211,8 +212,8 @@ end
 
 Agent.trySurveyThreat = function(self, env)
  local servant = self:getServant(env)
- local sID = servant:getID()
  local master = self:getCatchup(env)
+ local sID = servant:getID()
  local mID = master:getID()
  local threat = env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == sID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor) 
@@ -225,8 +226,8 @@ end
 
 Agent.trySurveyBeasts = function(self, env)
  local servant = self:getServant(env)
- local sID = servant:getID()
  local master = self:getCatchup(env)
+ local sID = servant:getID()
  local mID = master:getID()
  local target = env:getBeast():getMinimumElement(function(actor)
   local cover = not actor:isDead() and env:getTargetOf(actor)
@@ -241,8 +242,8 @@ end
 
 Agent.trySurveyLegion = function(self, env)
  local servant = self:getServant(env)
- local sID = servant:getID()
  local master = self:getCatchup(env)
+ local sID = servant:getID()
  local mID = master:getID()
  local threat = env:getBeast():getMinimumElement(function(actor)
   local tID = not actor:isDead() and not actor:mayFriendship() and actor:getTargetID()
@@ -274,20 +275,25 @@ end
 Agent.tryCuringFellow = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
- local sspr = servant:getSP().ratio
- local shpr = servant:getHP().ratio
- local mhpr = master:getHP().ratio
+ local shp = servant:getHP()
+ local ssp = servant:getSP()
+ local mhp = master:getHP()
+ local msp = master:getSP()
+ local shpr = shp and shp.ratio
+ local sspr = ssp and ssp.ratio
+ local mhpr = mhp and mhp.ratio
+ local mspr = msp and msp.ratio
  local skill = SKILL_REMEDY_ID
  local range = servant:getSkillAttackRange(skill)
  local peace = env:getBeast():all(function(actor)
   local distance = servant:getDistanceToTarget(actor)
-  return not ( distance and distance <= range ) or actor:isDead() or actor:mayFriendship()
+  return ( not distance or range < distance ) or actor:isDead() or actor:mayFriendship()
  end)
- if not peace or not self:mayUseSkill(skill, env) then
+ if not peace or not self:mayUseSkill(skill, env) or not shpr or not sspr then
   -- nil
- elseif mhpr < sspr and shpr < sspr then
+ elseif mhpr and mhpr < sspr and shpr < sspr then
   return self:pushState(STATE_ARTING, {5, skill, servant:getID(), nil})
- elseif mhpr < sspr then
+ elseif mhpr and mhpr < sspr then
   return self:pushState(STATE_ARTING, {3, skill, servant:getID(), nil})
  elseif shpr < sspr then
   return self:pushState(STATE_ARTING, {4, skill, servant:getID(), nil})
@@ -319,8 +325,8 @@ end
 
 Agent.tryFollowTarget = function(self, env, target)
  local servant = self:getServant(env)
- local actor = target and env:getActorByID(target)
- local distance = actor and servant:getDistanceToTarget(actor)
+ local actor = env:getActorByID(target)
+ local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
  if not distance then
   -- nil
  elseif distance > DISTANCE_TO_FOLLOW_MIN then
@@ -332,7 +338,13 @@ Agent.tryMovingGround = function(self, env, ground)
  local servant = self:getServant(env)
  local range = 0
  local distance = servant:getDistanceToGround(ground, math.huge) -- L∞ norm
- return distance and range < distance and self:getRetryCount() < MOVING_CHANCE and servant:moveToGround(ground) 
+ if not distance then
+  -- nil
+ elseif distance <= range then
+  -- nil
+ elseif self:getRetryCount() < MOVING_CHANCE then
+  return servant:stepToGround(ground) 
+ end
 end
 
 Agent.tryArtingTarget = function(self, env, level, skill, target)
@@ -356,15 +368,20 @@ end
 Agent.tryAttackArting = function(self, env, target)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
- local sspr = servant:getSP().ratio
- local shpr = servant:getHP().ratio
- local mhpr = master:getHP().ratio
+ local shp = servant:getHP()
+ local ssp = servant:getSP()
+ local mhp = servant:getHP()
+ local msp = servant:getSP()
+ local shpr = shp and shp.ratio
+ local sspr = ssp and ssp.ratio
+ local mhpr = mhp and mhp.ratio
+ local mspr = msp and msp.ratio
  local range = DISTANCE_TO_SUPPORTING
  local actor = env:getActorByID(target)
  local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
- if not distance then
+ if not distance or not shpr or not sspr then
   -- nil
- elseif distance <= range and shpr * mhpr <= sspr then
+ elseif distance <= range and shpr * ( mhpr or shpr ) <= sspr then
   for index, value in ipairs(ARTING_ON_ATTACK) do
    local level, skill = unpack(value)
    if level and skill and self:mayUseSkill(skill, env) then
@@ -376,8 +393,8 @@ end
 
 Agent.tryAttackTarget = function(self, env, target)
  local servant = env:getServant()
- local range = servant:getAttackRange()
  local actor = env:getActorByID(target)
+ local range = servant:getAttackRange()
  local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
  if not distance then
   -- nil
@@ -510,7 +527,7 @@ Agent.executeArtingCommand = function(self, cmd)
  local ground = cmd.ground
  if not level or not skill then
   -- nil
- elseif target then
+ elseif target or ground then
   return self:pushState(STATE_ARTING, {level, skill, target, nil})
  elseif ground then
   return self:pushState(STATE_ARTING, {level, skill, nil, ground})
@@ -656,37 +673,32 @@ Agent.routine = function(self, env)
   -- TraceAI(tostring(env))
  end
  
-  -- end 
- if false then
+ if true then
   local legion = env:getLegion()
   if not legion:isEmpty() then
-   local master = self:getCatchup(env)
    local servant = self:getServant(env)
-   local mID = master:getID()
+   local master = self:getCatchup(env)
    local sID = servant:getID()
+   local mID = master:getID()
    local target = master:isAttack() and env:getTargetOf(master)
    local threat = env:getBeast():getMinimumElement(function(actor)
     local tID = not actor:mayFriendship() and not actor:isDead() and actor:getTargetID()
-    return ( tID == mID or tID == sID ) and actor:getDistanceToTarget(master)
+	return ( tID == mID or tID == sID ) and actor:getDistanceToTarget(master)
    end)
-   TraceAI("legion control")
    if not target or not threat then
-    TraceAI('legion follow')
     legion:forEach(function(actor)
-     actor:stepToTarget(master)
-    end)
+	 actor:stepToTarget(master)
+	end)
    elseif target then
-    TraceAI('attack target')
     legion:forEach(function(actor)
-     actor:attackTarget(target)
-     actor:stepToTarget(target)
-    end)
+	 actor:attackTarget(target)
+	 actor:stepToTarget(target)
+	end)
    elseif threat then
-    TraceAI('attack threat')
     legion:forEach(function(actor)
-     actor:attackTarget(threat)
-     actor:stepToTarget(threat)
-    end)
+	 actor:attackTarget(target)
+	 actor:stepToTarget(target)
+	end)    
    end
   end
  end 

@@ -53,8 +53,8 @@ local DISTANCE_TO_FOLLOW_MAX = 8
 local DISTANCE_TO_SUPPORTING = 11
 local DISTANCE_TO_STANDALONE = 13
 
-local MOVING_CHANCE = 4
-local ARTING_CHANCE = 4
+local MOVING_CHANCE = 5
+local ARTING_CHANCE = 5
 
 local JAMMER_TO_CASTER = {{5, SKILL_NEEDLE_ID}, {1, SKILL_MIRAGE_ID}} -- 優先度: ニードルオブパラライズLV5 > カプリスLV1
 local ARTING_ON_ATTACK = {{5, SKILL_MIRAGE_ID}, {1, SKILL_NEEDLE_ID}} -- 優先度: カプリスLV5 > ニードルオブパラライズLV1
@@ -195,9 +195,9 @@ Agent.trySurveyCaster = function(self, env)
  local sID = servant:getID()
  local mID = master:getID() 
  local caster = env:getBeast():getMinimumElement(function(actor)
-  return actor:getTargetID() == sID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
- end) or env:getBeast():getMinimumElement(function(actor)
   return actor:getTargetID() == mID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
+ end) or env:getBeast():getMinimumElement(function(actor)
+  return actor:getTargetID() == sID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
  end)
  local distance = caster and caster:getDistanceToTarget(master, math.huge)
  if distance and distance < DISTANCE_TO_SUPPORTING then
@@ -240,7 +240,7 @@ Agent.trySurveyBeasts = function(self, env)
  return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, target:getID())
 end
 
-Agent.trySurveyLegion = function(self, env)
+Agent.trySurveySummon = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
  local sID = servant:getID()
@@ -325,12 +325,12 @@ end
 
 Agent.tryFollowTarget = function(self, env, target)
  local servant = self:getServant(env)
- local actor = env:getActorByID(target)
- local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
+ local object = env:getActorByID(target)
+ local distance = object and not object:isDead() and servant:getDistanceToTarget(object)
  if not distance then
   -- nil
  elseif distance > DISTANCE_TO_FOLLOW_MIN then
-  return servant:stepToTarget(actor)
+  return servant:stepToTarget(object)
  end
 end
 
@@ -349,20 +349,30 @@ end
 
 Agent.tryArtingTarget = function(self, env, level, skill, target)
  local servant = self:getServant(env)
- local actor = env:getActorByID(target)
  local range = servant:getSkillAttackRange(skill)
- local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
+ local object = env:getActorByID(target)
+ local distance = object and not object:isDead() and servant:getDistanceToTarget(object)
  if not distance or not self:mayUseSkill(skill, env) then
   -- nil
  elseif distance <= range then
-  return not self:tryUseSkillTarget(level, skill, actor, env)
+  return not self:tryUseSkillTarget(level, skill, object, env)
  elseif self:getRetryCount() < MOVING_CHANCE then
-  return servant:stepToTarget(actor)
+  return servant:stepToTarget(object)
  end
 end
 
 Agent.tryArtingGround = function(self, env, level, skill, ground)
- 
+ local servant = self:getServant(env)
+ local range = servant:getSkillAttackRange(skill)
+ local distance = servant:getDistanceToGround(ground)
+ if not distance or not self:mayUseSkill(skill, env) then
+  -- nil
+ elseif distance <= range then
+  return not self:tryUseSkillGround(level, skill, ground, env)
+ else
+  return servant:stepToGround(ground)
+ else
+ end
 end
 
 Agent.tryAttackArting = function(self, env, target)
@@ -411,7 +421,7 @@ Agent.onIdlingState = function(self, env)
  elseif self.strategy == STRATEGY_STABLE then
   return self:tryAroundMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveyLegion(env) or self:trySurveyCaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+  return self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_FOLLOW then
   return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_DEFEND then
@@ -428,7 +438,7 @@ Agent.onPatrolState = function(self, env)
  elseif self.strategy == STRATEGY_STABLE then
   return self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveyLegion(env) or self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
+  return self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_FOLLOW then
   return self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_DEFEND then
@@ -527,7 +537,7 @@ Agent.executeArtingCommand = function(self, cmd)
  local ground = cmd.ground
  if not level or not skill then
   -- nil
- elseif target or ground then
+ elseif target then
   return self:pushState(STATE_ARTING, {level, skill, target, nil})
  elseif ground then
   return self:pushState(STATE_ARTING, {level, skill, nil, ground})
@@ -602,17 +612,15 @@ Agent.executeDesignCommand = function(self, cmd)
      and self:appendState(STATE_DESIGN, ground + vector2( 0, 1))
   end
  end
- if ground then
-  if nil then
-   -- nil
-  elseif self:isDesignState() then
-   self.strategy = self.strategy and STRATEGY_CHANGE[self.strategy] or STRATEGY_STABLE  
-   return self:store() and indicate(ground, self.strategy)
-  elseif self:isIdlingState() then
-   return                  indicate(ground, self.strategy)
-  else
-   return self:resetState(STATE_IDLING, nil)
-  end
+ if not ground then
+  -- nil
+ elseif self:isDesignState() then 
+  self.strategy = self.strategy and STRATEGY_CHANGE[self.strategy] or STRATEGY_STABLE  
+  return self:store() and indicate(ground, self.strategy) 
+ elseif self:isIdlingState() then
+  return                  indicate(ground, self.strategy)
+ else
+  return self:resetState(STATE_IDLING, nil)
  end
 end
 

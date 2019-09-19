@@ -60,7 +60,7 @@ Env.getActorByID = function(self, id)
 end
 Env.getActorsByPosition = function(self, ground)
  return self.whole:filter(function(actor)
-  actor:getPosition() == ground
+  return actor:getPosition() == ground
  end)
 end
 Env.getMaster = function(self)

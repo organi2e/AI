@@ -371,7 +371,6 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
   return not self:tryUseSkillGround(level, skill, ground, env)
  else
   return servant:stepToGround(ground)
- else
  end
 end
 

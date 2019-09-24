@@ -343,7 +343,7 @@ Agent.tryMovingGround = function(self, env, ground)
  elseif distance <= range then
   -- nil
  elseif self:getRetryCount() < MOVING_CHANCE then
-  return servant:stepToGround(ground) 
+  return servant:moveToGround(ground) 
  end
 end
 
@@ -371,6 +371,7 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
   return not self:tryUseSkillGround(level, skill, ground, env)
  else
   return servant:stepToGround(ground)
+ else
  end
 end
 

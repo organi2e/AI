@@ -4,8 +4,8 @@ local Set = require('./AI/USER_AI/Set')
 local vector2 = require('./AI/USER_AI/Geometry').vector2
 
 local Command = {}
-Command.new = function(class, msg, env, config, reserved)
- local obj = {raw={msg}, clock=env.clock}
+Command.new = function(class, state, msg, env, reserved)
+ local obj = {}
  if not msg or not env then
   -- nil
  elseif msg[1] == NONE_CMD then
@@ -70,7 +70,10 @@ Command.new = function(class, msg, env, config, reserved)
    obj.design = true
    obj.ground = ground
   else
+   local clock = env:getClock()
    obj.revise = true
+   obj.forced = state.revise and state.revise - clock < 1
+   state.revise = clock
   end
  end
  return setmetatable(obj, {__index=class, __tostring=class.tostring})
@@ -83,7 +86,9 @@ end
 
 local Order = {}
 Order.new = function(class)
- return setmetatable({}, {__index=class, __tostring=class.tostring})
+ local obj = {}
+ obj.state = {}
+ return setmetatable(obj, {__index=class, __tostring=class.tostring})
 end
 Order.store = function(self)
  return self
@@ -97,9 +102,9 @@ Order.observe = function(self, id, env)
  if not env then
   -- nil
  elseif msg and msg[1] and msg[1] ~= NONE_CMD then
-  return Command:new(msg, env, self.config, false)
+  return Command:new(self.state, msg, env, false)
  elseif res and res[1] and res[1] ~= NONE_CMD then
-  return Command:new(res, env, self.config, true)
+  return Command:new(self.state, res, env, true)
  end
 end
 Order.tostring = function(self, visit)

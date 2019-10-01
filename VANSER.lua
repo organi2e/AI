@@ -55,6 +55,7 @@ local DISTANCE_TO_STANDALONE = 13
 
 local MOVING_CHANCE = 5
 local ARTING_CHANCE = 5
+local AROUND_RATING = 0.95 -- 主人の周辺を移動する確率
 
 local JAMMER_TO_CASTER = {{5, SKILL_NEEDLE_ID}, {1, SKILL_MIRAGE_ID}} -- 優先度: ニードルオブパラライズLV5 > カプリスLV1
 local ARTING_ON_ATTACK = {{5, SKILL_MIRAGE_ID}, {1, SKILL_NEEDLE_ID}} -- 優先度: カプリスLV5 > ニードルオブパラライズLV1
@@ -111,7 +112,7 @@ end
 
 Agent.appendState = function(self, state, input)
  self.stack:enque({state, input})
- return true
+ return state, input
 end
 
 Agent.resetState = function(self, state, input)
@@ -127,7 +128,7 @@ end
 
 Agent.setState = function(self, state, input)
  self.state, self.input, self.retry = state, input, nil
- return true
+ return state, input
 end
 
 Agent.popState = function(self)
@@ -267,28 +268,8 @@ Agent.trySurveySummon = function(self, env)
 end
 
 Agent.trySurveyRelief = function(self, env, target)
- local servant = self:getServant(env)
  local level, skill = 1, SKILL_RELIEF_ID
- return self:mayUseSkill(skill, env) and self:tryUseSkillTarget(level, skill, target, env)
-end
-
-Agent.tryFollowRelief = function(self, env, target)
- local servant = self:getServant(env)
- local object = env:getActorByID(target)
- local sp = servant:getPosition()
- local op = object and not object:isDead() and object:getPosition()
- local dp = op and sp - op
- local delta = dp and dp:len(2)
- local skill = SKILL_RELIEF_ID
- local range = servant:getSkillAttackRange(skill)
- if not delta then
-  -- nil
- elseif delta > range then
-  local ground = sp - dp:map(function(p)
-   return math.modf(p*range/delta)
-  end)
-  return servant:moveToGround(ground)
- end
+ return self:tryArtingTarget(env, level, skill, target)
 end
 
 Agent.tryCuringFellow = function(self, env)
@@ -320,13 +301,22 @@ Agent.tryCuringFellow = function(self, env)
 end
 
 Agent.tryAroundMaster = function(self, env)
- local servant = self:getServant(env)
  local master = self:getCatchup(env)
- if master:isSit() then
-  local ground = master:getPosition()
-  local around = vector2(math.random(-1, 1), math.random(-1, 1))
-  return ground and around and servant:moveToGround(ground + around)
+ if master:isSit() and AROUND_RATING < math.random() then
+  local target = master:getID()
+  local series = coroutine.create(function(env)
+   local servant = self:getServant(env)
+   local object = env:getActorByID(target)
+   if object:isSit() then
+    local ground = object:getPosition()
+    local around = vector2(math.random(-1, 1), math.random(-1, 1))
+    env = coroutine.yield(STATE_MOVING, ground + around)	
+   end
+  end)
  end
+ -- local ground = master:getPosition()
+ -- local around = vector2(math.random(-1, 1), math.random(-1, 1))
+ -- return ground and around and servant:moveToGround(ground + around)
 end
 
 Agent.tryFollowMaster = function(self, env)
@@ -388,7 +378,7 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
   -- nil
  elseif distance <= range then
   return not self:tryUseSkillGround(level, skill, ground, env)
- else
+ elseif self:getRetryCount() < MOVING_CHANCE then
   return servant:stepToGround(ground)
  end
 end
@@ -471,15 +461,15 @@ Agent.onReliefState = function(self, env)
  if not target then
   -- nil
  elseif self.strategy == STRATEGY_STABLE then
-  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:tryCuringFellow(env) or true
+  return self:trySurveyRelief(env, target) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_UNIQUE then
-  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
+  return self:trySurveyRelief(env, target) or self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_FOLLOW then
-  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
+  return self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_DEFEND then
-  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
+  return self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_ACTIVE then
-  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
+  return self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  end
 end
 
@@ -520,7 +510,10 @@ end
 
 Agent.onSeriesState = function(self, env)
  local series = self.input
- return series and coroutine.resume(series, env) -- and self:routine(env)
+ if series then
+  local yield, state, input = coroutine.resume(series, env)
+  return yield and state and self:pushState(state, input)
+ end
 end
 
 Agent.onDesignState = function(self, env)
@@ -652,7 +645,8 @@ Agent.executePatrolCommand = function(self, cmd)
 end
 
 Agent.executeReviseCommand = function(self, cmd)
- return self:isIdlingState() and self:resetState(STATE_IDLING, nil) or self:pushState(STATE_IDLING, nil)
+ local forced = cmd.forced
+ return forced and self:resetState(STATE_IDLING, nil) or self:popState()
 end
 
 Agent.executeSelectCommand = function(self, cmd)

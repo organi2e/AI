@@ -1,5 +1,5 @@
 local STRATEGY_STABLE = 1 -- 追従 + カプリス
-local STRATEGY_UNIQUE = 2 -- 追従 + サモンのみ + カプリス (仮)
+local STRATEGY_UNIQUE = 2 -- サモンのみ + 追従 + カプリス (仮)
 local STRATEGY_FOLLOW = 3 -- 詠唱反応 + 通常支援 + 追従 + カプリス
 local STRATEGY_DEFEND = 4 -- 詠唱反応 + 通常支援 + 脅威索敵 + 追従 + カプリス
 local STRATEGY_ACTIVE = 5 -- 詠唱反応 + 通常支援 + 脅威索敵 + 積極攻撃 + 追従 + カプリス
@@ -45,7 +45,7 @@ COOLS[SKILL_POISON_ID] = {2000, 2000, 2000, 2000, 2000} -- http://www.ragfun.net
 DELAY[SKILL_POISON_ID] = {0, 0, 0, 0, 0} -- ?
 
 local SKILL_RELIEF_ID = 8021 -- i.e. Pain killer
-COOLS[SKILL_RELIEF_ID] = {30000, 30000, 30000, 60000, 60000} -- http://www.ragfun.net/alchemist/index.php?%A5%DB%A5%E0%A5%F3%A5%AF%A5%EB%A5%B9S%2FHomunType%2FSERA#h8df5b10
+COOLS[SKILL_RELIEF_ID] = {25000, 30000, 30000, 60000, 60000} -- http://www.ragfun.net/alchemist/index.php?%A5%DB%A5%E0%A5%F3%A5%AF%A5%EB%A5%B9S%2FHomunType%2FSERA#h8df5b10
 DELAY[SKILL_RELIEF_ID] = {0, 0, 0, 0, 0} -- ?
 
 local DISTANCE_TO_FOLLOW_MIN = 2
@@ -269,7 +269,26 @@ end
 Agent.trySurveyRelief = function(self, env, target)
  local servant = self:getServant(env)
  local level, skill = 1, SKILL_RELIEF_ID
- return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, target, nil})
+ return self:mayUseSkill(skill, env) and self:tryUseSkillTarget(level, skill, target, env)
+end
+
+Agent.tryFollowRelief = function(self, env, target)
+ local servant = self:getServant(env)
+ local object = env:getActorByID(target)
+ local sp = servant:getPosition()
+ local op = object and not object:isDead() and object:getPosition()
+ local dp = op and sp - op
+ local delta = dp and dp:len(2)
+ local skill = SKILL_RELIEF_ID
+ local range = servant:getSkillAttackRange(skill)
+ if not delta then
+  -- nil
+ elseif delta > range then
+  local ground = sp - dp:map(function(p)
+   return math.modf(p*range/delta)
+  end)
+  return servant:moveToGround(ground)
+ end
 end
 
 Agent.tryCuringFellow = function(self, env)
@@ -371,7 +390,6 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
   return not self:tryUseSkillGround(level, skill, ground, env)
  else
   return servant:stepToGround(ground)
- else
  end
 end
 
@@ -453,15 +471,15 @@ Agent.onReliefState = function(self, env)
  if not target then
   -- nil
  elseif self.strategy == STRATEGY_STABLE then
-  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_FOLLOW then
-  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyRelief(env, target) or self:tryFollowTarget(env, target) or true
+  return self:tryFollowRelief(env, target) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
  end
 end
 
@@ -502,10 +520,7 @@ end
 
 Agent.onSeriesState = function(self, env)
  local series = self.input
- if series then
-  local yield, state, input = coroutine.resume(series, env)
-  return yield and self:pushState(state, input) and self:routine(env)
- end
+ return series and coroutine.resume(series, env) -- and self:routine(env)
 end
 
 Agent.onDesignState = function(self, env)

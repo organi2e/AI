@@ -138,7 +138,7 @@ end
 
 Agent.getRetryCount = function(self)
  self.retry = ( self.retry or 0 ) + 1
- return self.retry
+ return 0 -- self.retry
 end
 
 Agent.getSkillCD = function(self, level, skill)
@@ -211,18 +211,23 @@ Agent.trySurveyCaster = function(self, env)
  end
 end
 
-Agent.trySurveyThreat = function(self, env)
+Agent.tryMasterThreat = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
- local sID = servant:getID()
- local mID = master:getID()
- local threat = env:getBeast():getMinimumElement(function(actor)
-  return actor:getTargetID() == sID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor) 
- end) or env:getBeast():getMinimumElement(function(actor)
-  return actor:getTargetID() == mID and not actor:isDead() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
+ local target = master:getID()
+ local threat, distance = env:getBeast():getMinimumElement(function(actor)
+  return actor:getTargetID() == target and not actor:isDead() and not actor:mayFriendship() and actor:getDistanceToTarget(servant)
  end)
- local distance = threat and threat:getDistanceToTarget(master, math.huge)
- return distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, threat:getID())
+ return threat and distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, threat:getID())
+end
+
+Agent.trySurveyThreat = function(self, env)
+ local servant = self:getServant(env)
+ local target = servant:getID()
+ local threat, distance = env:getBeast():getMinimumElement(function(actor)
+  return actor:getTargetID() == target and not actor:isDead() and not actor:mayFriendship() and actor:getDistanceToTarget(servant)
+ end)
+ return threat and distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, threat:getID())
 end
 
 Agent.trySurveyBeasts = function(self, env)
@@ -301,22 +306,24 @@ Agent.tryCuringFellow = function(self, env)
 end
 
 Agent.tryAroundMaster = function(self, env)
+ local servant = self:getServant(env)
  local master = self:getCatchup(env)
- if master:isSit() and AROUND_RATING < math.random() then
-  local target = master:getID()
-  local series = coroutine.create(function(env)
-   local servant = self:getServant(env)
-   local object = env:getActorByID(target)
-   if object:isSit() then
-    local ground = object:getPosition()
-    local around = vector2(math.random(-1, 1), math.random(-1, 1))
-    env = coroutine.yield(STATE_MOVING, ground + around)	
-   end
-  end)
+ if master and master:isSit() and AROUND_RATING < math.random() then
+ --  local target = master:getID()
+ --  local series = coroutine.create(function(env)
+ --   local servant = self:getServant(env)
+ --   local object = env:getActorByID(target)
+ --   if object:isSit() then
+ --    local ground = object:getPosition()
+ --    local around = vector2(math.random(-1, 1), math.random(-1, 1))
+ --    env = coroutine.yield(STATE_MOVING, ground + around)	
+ --   end
+ --  end)
+ -- end
+  local ground = master:getPosition()
+  local around = vector2(math.random(-1, 1), math.random(-1, 1))
+  return ground and around and servant:moveToGround(ground + around)
  end
- -- local ground = master:getPosition()
- -- local around = vector2(math.random(-1, 1), math.random(-1, 1))
- -- return ground and around and servant:moveToGround(ground + around)
 end
 
 Agent.tryFollowMaster = function(self, env)
@@ -361,12 +368,12 @@ Agent.tryArtingTarget = function(self, env, level, skill, target)
  local range = servant:getSkillAttackRange(skill)
  local object = env:getActorByID(target)
  local distance = object and not object:isDead() and servant:getDistanceToTarget(object)
- if not distance or not self:mayUseSkill(skill, env) then
+ if not distance then
   -- nil
- elseif distance <= range then
-  return not self:tryUseSkillTarget(level, skill, object, env)
- elseif self:getRetryCount() < MOVING_CHANCE then
+ elseif range < distance and self:getRetryCount() < MOVING_CHANCE then
   return servant:stepToTarget(object)
+ elseif self:mayUseSkill(skill, env) then
+  return not self:tryUseSkillTarget(level, skill, object, env)
  end
 end
 
@@ -374,12 +381,12 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
  local servant = self:getServant(env)
  local range = servant:getSkillAttackRange(skill)
  local distance = servant:getDistanceToGround(ground)
- if not distance or not self:mayUseSkill(skill, env) then
+ if not distance then
   -- nil
- elseif distance <= range then
-  return not self:tryUseSkillGround(level, skill, ground, env)
- elseif self:getRetryCount() < MOVING_CHANCE then
+ elseif range < distance and self:getRetryCount() < MOVING_CHANCE then
   return servant:stepToGround(ground)
+ elseif self:mayUseSkill(skill, env) then
+  return not self:tryUseSkillGround(level, skill, ground, env)
  end
 end
 
@@ -433,9 +440,9 @@ Agent.onIdlingState = function(self, env)
  elseif self.strategy == STRATEGY_FOLLOW then
   return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:trySurveyThreat(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:trySurveyThreat(env) or self:trySurveyBeasts(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or 	self:trySurveyBeasts(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  end
 end
 
@@ -450,9 +457,9 @@ Agent.onPatrolState = function(self, env)
  elseif self.strategy == STRATEGY_FOLLOW then
   return self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyCaster(env) or self:trySurveyThreat(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
+  return self:trySurveyCaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyCaster(env) or self:trySurveyThreat(env) or self:trySurveyBeasts(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
+  return self:trySurveyCaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:trySurveyBeasts(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
  end
 end
 

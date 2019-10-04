@@ -50,7 +50,7 @@ DELAY[SKILL_RELIEF_ID] = {0, 0, 0, 0, 0} -- ?
 
 local DISTANCE_TO_FOLLOW_MIN = 2
 local DISTANCE_TO_FOLLOW_MAX = 8
-local DISTANCE_TO_SUPPORTING = 11
+local DISTANCE_TO_SUPPORTING = 9
 local DISTANCE_TO_STANDALONE = 13
 
 local MOVING_CHANCE = 5
@@ -178,7 +178,7 @@ end
 --
 Agent.trySurveyCancel = function(self, env)
  local distance = env:getPeerDistance(math.huge) -- L∞ norm
- return distance and DISTANCE_TO_STANDALONE < distance and self:resetState(STATE_IDLING, nil)
+ return distance and DISTANCE_TO_STANDALONE < distance and self:popState()
 end
 
 -- 
@@ -190,27 +190,6 @@ Agent.trySurveyMaster = function(self, env)
 end
 
 --
-Agent.trySurveyCaster = function(self, env)
- local servant = self:getServant(env)
- local master = self:getCatchup(env)
- local sID = servant:getID()
- local mID = master:getID() 
- local caster = env:getBeast():getMinimumElement(function(actor)
-  return actor:getTargetID() == mID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
- end) or env:getBeast():getMinimumElement(function(actor)
-  return actor:getTargetID() == sID and actor:isCast() and not actor:mayFriendship() and servant:getDistanceToTarget(actor)
- end)
- local distance = caster and caster:getDistanceToTarget(master, math.huge)
- if distance and distance < DISTANCE_TO_SUPPORTING then
-  for index, value in ipairs(JAMMER_TO_CASTER) do
-   local level, skill = unpack(value)
-   if level and skill and self:mayUseSkill(skill, env) then
-    return self:pushState(STATE_ARTING, {level, skill, caster:getID(), nil})
-   end
-  end
- end
-end
-
 Agent.tryMasterThreat = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
@@ -230,6 +209,38 @@ Agent.trySurveyThreat = function(self, env)
  return threat and distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, threat:getID())
 end
 
+Agent.tryMasterCaster = function(self, env)
+ local servant = self:getServant(env)
+ local master = self:getCatchup(env)
+ local target = master:getID()
+ local caster, distance = env:getBeast():getMinimumElement(function(actor)
+  return actor:getTargetID() == target and actor:isCast() and not actor:mayFriendship() and actor:getDistanceToTarget(servant)
+ end)
+ if caster and distance and distance < DISTANCE_TO_SUPPORTING then
+  for index, value in ipairs(JAMMER_TO_CASTER) do
+   local level, skill = unpack(value)
+   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, caster:getID(), nil})
+  end
+ end
+ return threat and distance and distance < DISTANCE_TO_SUPPORTING and self:pushState(STATE_ATTACK, threat:getID())
+end
+
+--
+Agent.trySurveyCaster = function(self, env)
+ local servant = self:getServant(env)
+ local target = servant:getID()
+ local caster, distance = env:getBeast():getMinimumElement(function(actor)
+  return actor:getTargetID() == target and actor:isCast() and not actor:mayFriendship() and actor:getDistanceToTarget(servant)
+ end)
+ if caster and distance and distance < DISTANCE_TO_SUPPORTING then
+  for index, value in ipairs(JAMMER_TO_CASTER) do
+   local level, skill = unpack(value)   
+   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, caster:getID(), nil})
+  end
+ end
+end
+
+--
 Agent.trySurveyBeasts = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
@@ -251,30 +262,39 @@ Agent.trySurveySummon = function(self, env)
  local master = self:getCatchup(env)
  local sID = servant:getID()
  local mID = master:getID()
- local threat = env:getBeast():getMinimumElement(function(actor)
+ local threat, distance = env:getBeast():getMinimumElement(function(actor)
   local tID = not actor:isDead() and not actor:mayFriendship() and actor:getTargetID()
-  return ( tID == sID or tID == mID ) and actor:getDistanceToTarget(master)
+  return ( tID == sID or tID == mID ) and actor:getDistanceToTarget(servant)
  end)
- local distance = threat and threat:getDistanceToTarget(master, math.huge)
- if distance and distance < DISTANCE_TO_SUPPORTING then
+ if threat and distance and distance < DISTANCE_TO_SUPPORTING then
   local legion = env:getLegion()
   if legion:isEmpty() then
    local level, skill = 5, SKILL_SUMMON_ID
-   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, threat:getID(), nil})
+   return self:mayUseSkill(skill, env) and self:pushState(STATE_ARTING, {level, skill, threat:getID(), nil})   
   elseif legion:filter(function(actor) local enemy = env:getTargetOf(actor) return enemy and not enemy:isDead() end):isEmpty() then
    local range = servant:getAttackRange()
-   if distance <= range then
+   if range < distance then
+    return self:getRetryCount() < MOVING_CHANCE and servant:stepToTarget(threat)
+   else
     return servant:attackTarget(threat) and servant:stepToTarget(threat)
-   elseif self:getRetryCount() < MOVING_CHANCE then
-    return servant:stepToTarget(threat)
    end
   end
  end
 end
 
 Agent.trySurveyRelief = function(self, env, target)
+ local servant = self:getServant(env)
  local level, skill = 1, SKILL_RELIEF_ID
- return self:tryArtingTarget(env, level, skill, target)
+ local range = servant:getSkillAttackRange(skill)
+ local object = env:getActorByID(target)
+ local distance = object and not object:isDead() and servant:getDistanceToTarget(object)
+ if not distance then
+  -- nil
+ elseif range < distance then
+  return servant:stepToTarget(object)
+ elseif self:mayUseSkill(skill, env) then
+  return not self:tryUseSkillTarget(level, skill, object, env)
+ end
 end
 
 Agent.tryCuringFellow = function(self, env)
@@ -356,10 +376,8 @@ Agent.tryMovingGround = function(self, env, ground)
  local distance = servant:getDistanceToGround(ground, math.huge) -- L∞ norm
  if not distance then
   -- nil
- elseif distance <= range then
-  -- nil
- elseif self:getRetryCount() < MOVING_CHANCE then
-  return servant:moveToGround(ground) 
+ elseif range < distance then
+  return self:getRetryCount() < MOVING_CHANCE
  end
 end
 
@@ -395,8 +413,8 @@ Agent.tryAttackArting = function(self, env, target)
  local master = self:getCatchup(env)
  local shp = servant:getHP()
  local ssp = servant:getSP()
- local mhp = servant:getHP()
- local msp = servant:getSP()
+ local mhp = master:getHP()
+ local msp = master:getSP()
  local shpr = shp and shp.ratio
  local sspr = ssp and ssp.ratio
  local mhpr = mhp and mhp.ratio
@@ -416,6 +434,7 @@ Agent.tryAttackArting = function(self, env, target)
  end
 end
 
+--
 Agent.tryAttackTarget = function(self, env, target)
  local servant = env:getServant()
  local actor = env:getActorByID(target)
@@ -423,43 +442,45 @@ Agent.tryAttackTarget = function(self, env, target)
  local distance = actor and not actor:isDead() and servant:getDistanceToTarget(actor)
  if not distance then
   -- nil
- elseif distance <= range then
+ elseif range < distance then
+  return self:getRetryCount() < MOVING_CHANCE and servant:stepToTarget(actor)
+ else
   return servant:attackTarget(actor) and servant:stepToTarget(actor)
- elseif self:getRetryCount() < MOVING_CHANCE then
-  return servant:stepToTarget(actor)
  end
 end
 
+--
 Agent.onIdlingState = function(self, env)
  if not self.strategy then
   -- nil
- elseif self.strategy == STRATEGY_STABLE then
+ elseif self.strategy == STRATEGY_STABLE then --　遊戯 or 追従 or カプリス 
   return self:tryAroundMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
- elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
- elseif self.strategy == STRATEGY_FOLLOW then
-  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
- elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
- elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or 	self:trySurveyBeasts(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+ elseif self.strategy == STRATEGY_UNIQUE then -- 召喚 or 追従 or カプリス
+  return self:trySurveySummon(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+ elseif self.strategy == STRATEGY_FOLLOW then -- 詠唱反応(master) or 詠唱反応(servant) or 支援(master) or 追従 or カプリス
+  return self:tryMasterCaster(env) or self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+ elseif self.strategy == STRATEGY_DEFEND then -- 詠唱反応(master) or 詠唱反応(servant) or 支援(master) or 迎撃(master) or 迎撃(servant) or 追従 or カプリス
+  return self:tryMasterCaster(env) or self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryMasterThreat(env) or self:trySurveyThreat(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
+ elseif self.strategy == STRATEGY_ACTIVE then -- 詠唱反応(master) or 詠唱反応(servant) or 支援(master) or 迎撃(master) or 迎撃(servant) or 迎撃 or 追従 or カプリス
+  return self:tryMasterCaster(env) or self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryMasterThreat(env) or self:trySurveyThreat(env) or self:trySurveyBeasts(env) or self:tryFollowMaster(env) or self:tryCuringFellow(env)
  end
 end
 
+--
 Agent.onPatrolState = function(self, env)
  local ground = self.input
  if not ground then
   -- nil
- elseif self.strategy == STRATEGY_STABLE then
-  return self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
- elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
- elseif self.strategy == STRATEGY_FOLLOW then
-  return self:trySurveyCaster(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
- elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyCaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
- elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyCaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:trySurveyBeasts(env) or self:tryMovingGround(env, ground) or self:trySurveyCancel(env) or true
+ elseif self.strategy == STRATEGY_STABLE then -- 中断 or 待機 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:tryMovingGround(env, ground) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_UNIQUE then -- 中断 or 召喚 or 待機 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveySummon(env) or self:tryMovingGround(env, ground) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_FOLLOW then -- 中断 or 詠唱反応(servant) or 詠唱反応(master) or 待機 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyCaster(env) or self:tryMasterCaster(env) or self:tryMovingGround(env, ground) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_DEFEND then -- 中断 or 詠唱反応(servant) or 詠唱反応(master) or 迎撃(servant) or 迎撃(master) or 待機 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyCaster(env) or self:tryMasterCaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:tryMovingGround(env, ground) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_ACTIVE then -- 中断 or 詠唱反応(servant) or 詠唱反応(master) or 迎撃(servant) or 迎撃(master) or 索敵 or 待機 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyCaster(env) or self:tryMasterCaster(env) or self:trySurveyThreat(env) or self:tryMasterThreat(env) or self:trySurveyBeasts(env) or self:tryMovingGround(env, ground) or self:tryCuringFellow(env) or true
  end
 end
 
@@ -467,16 +488,16 @@ Agent.onReliefState = function(self, env)
  local target = self.input
  if not target then
   -- nil
- elseif self.strategy == STRATEGY_STABLE then
-  return self:trySurveyRelief(env, target) or self:tryCuringFellow(env) or true
- elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveyRelief(env, target) or self:trySurveySummon(env) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
- elseif self.strategy == STRATEGY_FOLLOW then
-  return self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
- elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
- elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_STABLE then -- 中断 or スキル or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyRelief(env, target) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_UNIQUE then -- 中断 or スキル or 召喚 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyRelief(env, target) or self:trySurveySummon(env) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_FOLLOW then -- 中断 or スキル or 詠唱反応(servant) or 詠唱反応(master) or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryMasterCaster(env) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_DEFEND then -- 中断 or スキル or 詠唱反応(servant) or 詠唱反応(master) or 迎撃(servant) or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryMasterCaster(env) or self:trySurveyThreat(env) or self:tryCuringFellow(env) or true
+ elseif self.strategy == STRATEGY_ACTIVE then -- 中断 or スキル or 詠唱反応(servant) or 詠唱反応(master) or 迎撃(servant) or 索敵 or カプリス or 継続
+  return self:trySurveyCancel(env) or self:trySurveyRelief(env, target) or self:trySurveyCaster(env) or self:tryMasterCaster(env) or self:trySurveyThreat(env) or self:trySurveyBeasts(env) or self:tryCuringFellow(env) or true
  end
 end
 
@@ -484,16 +505,16 @@ Agent.onAttackState = function(self, env)
  local target = self.input
  if not target then
   -- nil
- elseif self.strategy == STRATEGY_STABLE then
+ elseif self.strategy == STRATEGY_STABLE then -- 中断 or スキル or 攻撃
   return self:trySurveyCancel(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
- elseif self.strategy == STRATEGY_UNIQUE then
-  return self:trySurveyCancel(env) or self:tryAttackTarget(env, target)
- elseif self.strategy == STRATEGY_FOLLOW then
-  return self:trySurveyCancel(env) or self:trySurveyCaster(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
- elseif self.strategy == STRATEGY_DEFEND then
-  return self:trySurveyCancel(env) or self:trySurveyCaster(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
- elseif self.strategy == STRATEGY_ACTIVE then
-  return self:trySurveyCancel(env) or self:trySurveyCaster(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
+ elseif self.strategy == STRATEGY_UNIQUE then -- 中断 or 召喚 or 攻撃
+  return self:trySurveyCancel(env) or self:trySurveySummon(env) or self:tryAttackTarget(env, target)
+ elseif self.strategy == STRATEGY_FOLLOW then -- 中断 or 詠唱反応(master) or 詠唱反応(servant) or 支援(master) or スキル or 攻撃
+  return self:trySurveyCancel(env) or self:tryMasterCaster(env) or self:trySurveyCaster(env) or self:trySurveyMaster(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
+ elseif self.strategy == STRATEGY_DEFEND then -- 中断 or 詠唱反応(master) or 詠唱反応(servant) or スキル or 攻撃
+  return self:trySurveyCancel(env) or self:tryMasterCaster(env) or self:trySurveyCaster(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
+ elseif self.strategy == STRATEGY_ACTIVE then -- 中断 or 詠唱反応(master) or 詠唱反応(servant) or スキル or 攻撃
+  return self:trySurveyCancel(env) or self:tryMasterCaster(env) or self:trySurveyCaster(env) or self:tryAttackArting(env, target) or self:tryAttackTarget(env, target)
  end
 end
 

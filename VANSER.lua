@@ -377,7 +377,7 @@ Agent.tryMovingGround = function(self, env, ground)
  if not distance then
   -- nil
  elseif range < distance then
-  return self:getRetryCount() < MOVING_CHANCE
+  return self:getRetryCount() < MOVING_CHANCE and servant:moveToGround(ground)
  end
 end
 

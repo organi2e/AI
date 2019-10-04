@@ -138,7 +138,7 @@ end
 
 Agent.getRetryCount = function(self)
  self.retry = ( self.retry or 0 ) + 1
- return 0 -- self.retry
+ return self.retry
 end
 
 Agent.getSkillCD = function(self, level, skill)
@@ -370,8 +370,8 @@ Agent.tryArtingTarget = function(self, env, level, skill, target)
  local distance = object and not object:isDead() and servant:getDistanceToTarget(object)
  if not distance then
   -- nil
- elseif range < distance and self:getRetryCount() < MOVING_CHANCE then
-  return servant:stepToTarget(object)
+ elseif range < distance then
+  return self:getRetryCount() < MOVING_CHANCE and servant:stepToTarget(object)
  elseif self:mayUseSkill(skill, env) then
   return not self:tryUseSkillTarget(level, skill, object, env)
  end
@@ -383,8 +383,8 @@ Agent.tryArtingGround = function(self, env, level, skill, ground)
  local distance = servant:getDistanceToGround(ground)
  if not distance then
   -- nil
- elseif range < distance and self:getRetryCount() < MOVING_CHANCE then
-  return servant:stepToGround(ground)
+ elseif range < distance then
+  return self:getRetryCount() < MOVING_CHANCE and servant:stepToGround(ground)
  elseif self:mayUseSkill(skill, env) then
   return not self:tryUseSkillGround(level, skill, ground, env)
  end

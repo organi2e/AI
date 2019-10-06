@@ -329,20 +329,16 @@ Agent.tryAroundMaster = function(self, env)
  local servant = self:getServant(env)
  local master = self:getCatchup(env)
  if master and master:isSit() and AROUND_RATING < math.random() then
- --  local target = master:getID()
- --  local series = coroutine.create(function(env)
- --   local servant = self:getServant(env)
- --   local object = env:getActorByID(target)
- --   if object:isSit() then
- --    local ground = object:getPosition()
- --    local around = vector2(math.random(-1, 1), math.random(-1, 1))
- --    env = coroutine.yield(STATE_MOVING, ground + around)	
- --   end
- --  end)
- -- end
-  local ground = master:getPosition()
-  local around = vector2(math.random(-1, 1), math.random(-1, 1))
-  return ground and around and servant:moveToGround(ground + around)
+  local target = master:getID()
+  local series = coroutine.create(function(env)
+   for v = 1, 16 do
+    local object = env:getActorByID(target)
+    local ground = object:getPosition()
+    local around = vector2(math.random(-1, 1), math.random(-1, 1))
+    env = coroutine.yield(STATE_MOVING, ground + around)
+   end
+  end)
+  return self:pushState(STATE_SERIES, series)
  end
 end
 
@@ -540,7 +536,7 @@ Agent.onSeriesState = function(self, env)
  local series = self.input
  if series then
   local yield, state, input = coroutine.resume(series, env)
-  return yield and state and self:pushState(state, input)
+  return yield and state and self:pushState(state, input) and self:routine(env)
  end
 end
 
